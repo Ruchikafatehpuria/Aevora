@@ -1,0 +1,500 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")
+  /// Direct (non-pooled) connection used for migrations, e.g. Supabase's session pooler on port 5432.
+  directUrl = env("DIRECT_URL")
+}
+
+// ───────────────────────────── Identity ─────────────────────────────
+
+model User {
+  id            String    @id @default(cuid())
+  email         String    @unique
+  passwordHash  String
+  name          String
+  emailVerified DateTime?
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  profile        Profile?
+  sessions       Session[]
+  tokens         AuthToken[]
+  notifications  Notification[]
+  lockerSettings LockerSettings?
+  folders        Folder[]
+  files          StoredFile[]
+  importBatches  ImportBatch[]
+  chatArchives   WhatsappChatArchive[]
+  orgRules       OrganizationRule[]
+  categories     FileCategory[]
+  conversations  Conversation[]
+  projects       Project[]
+  tasks          Task[]
+  events         CalendarEvent[]
+}
+
+model Profile {
+  id             String   @id @default(cuid())
+  userId         String   @unique
+  user           User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  headline       String?
+  bio            String?
+  institution    String?
+  fieldOfStudy   String?
+  educationLevel String?
+  graduationYear Int?
+  location       String?
+  timezone       String?
+  interests      String[] @default([])
+  skills         String[] @default([])
+  careerGoals    String?
+  linkedinUrl    String?
+  githubUsername String?
+  websiteUrl     String?
+  onboarded      Boolean  @default(false)
+  updatedAt      DateTime @updatedAt
+}
+
+model Session {
+  id            String    @id @default(cuid())
+  tokenHash     String    @unique
+  userId        String
+  user          User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  userAgent     String?
+  ipAddress     String?
+  createdAt     DateTime  @default(now())
+  lastUsedAt    DateTime  @default(now())
+  /// Set when the user re-enters their password; unlocks sensitive files until then.
+  elevatedUntil DateTime?
+  expiresAt     DateTime
+
+  @@index([userId])
+}
+
+enum AuthTokenType {
+  EMAIL_VERIFICATION
+  PASSWORD_RESET
+}
+
+model AuthToken {
+  id        String        @id @default(cuid())
+  tokenHash String        @unique
+  type      AuthTokenType
+  userId    String
+  user      User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  expiresAt DateTime
+  usedAt    DateTime?
+  createdAt DateTime      @default(now())
+
+  @@index([userId, type])
+}
+
+// ─────────────────────────── Platform ───────────────────────────
+
+model Notification {
+  id        String    @id @default(cuid())
+  userId    String
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  title     String
+  body      String?
+  href      String?
+  readAt    DateTime?
+  createdAt DateTime  @default(now())
+
+  @@index([userId, readAt])
+}
+
+// Fixed-window rate limiting for sensitive endpoints (login, signup, password reset).
+model RateLimit {
+  key         String   @id
+  count       Int
+  windowStart DateTime
+}
+
+// ─────────────────────────── Digital Locker (Module 25) ───────────────────────────
+
+enum OrganizeMode {
+  AUTO // apply confident AI suggestions automatically; uncertain ones wait for approval
+  ASK // AI suggests, user approves
+  MANUAL // no AI suggestions; everything stays in the Inbox
+}
+
+model LockerSettings {
+  userId                 String       @id
+  user                   User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  organizeMode           OrganizeMode @default(ASK)
+  /// When false, AI only sees filename/type/size — never file contents.
+  aiReadsContent         Boolean      @default(false)
+  autoApplyMinConfidence Float        @default(0.8)
+  /// Consent for the AI Assistant to read (non-sensitive) file contents when answering.
+  assistantUsesFiles     Boolean      @default(false)
+  updatedAt              DateTime     @updatedAt
+
+  @@map("locker_settings")
+}
+
+model Folder {
+  id        String       @id @default(cuid())
+  userId    String
+  user      User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  name      String
+  parentId  String?
+  parent    Folder?      @relation("FolderTree", fields: [parentId], references: [id], onDelete: Cascade)
+  children  Folder[]     @relation("FolderTree")
+  files     StoredFile[]
+  createdAt DateTime     @default(now())
+
+  @@unique([userId, parentId, name])
+  @@index([userId])
+  @@map("folders")
+}
+
+model FileCategory {
+  id        String   @id @default(cuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  name      String
+  createdAt DateTime @default(now())
+
+  @@unique([userId, name])
+  @@map("file_categories")
+}
+
+enum FileSource {
+  MANUAL_UPLOAD
+  WHATSAPP
+  SHARE_SHEET
+  EMAIL
+  GOOGLE_DRIVE
+  ONEDRIVE
+  DROPBOX
+  CAMERA_SCAN
+}
+
+enum FileStatus {
+  PROCESSING
+  READY
+  FAILED
+  DUPLICATE_PENDING // identical to an existing file; waiting for the user's choice
+}
+
+enum OrganizationState {
+  INBOX // not yet organized
+  SUGGESTED // AI suggestion waiting for approval
+  ORGANIZED
+}
+
+model StoredFile {
+  id            String            @id @default(cuid())
+  userId        String
+  user          User              @relation(fields: [userId], references: [id], onDelete: Cascade)
+  folderId      String?
+  folder        Folder?           @relation(fields: [folderId], references: [id], onDelete: SetNull)
+  batchId       String?
+  batch         ImportBatch?      @relation(fields: [batchId], references: [id], onDelete: SetNull)
+  storageKey    String            @unique
+  originalName  String
+  displayName   String
+  extension     String
+  mimeType      String
+  sizeBytes     BigInt
+  sha256        String
+  source        FileSource
+  /// How the source was determined, e.g. "chat export", "filename pattern". Null when the user chose it.
+  sourceDetail  String?
+  originalPath  String?
+  status        FileStatus        @default(PROCESSING)
+  failureReason String?
+  organization  OrganizationState @default(INBOX)
+  category      String?
+  tags          String[]          @default([])
+  subject       String?
+  project       String?
+  importance    String?
+  documentDate  DateTime?
+  sensitive     Boolean           @default(false)
+  extractedText String?
+  pageTexts     Json?
+  suggestion    Json?
+  scanStatus    String            @default("not_scanned")
+  description   String?
+  starred       Boolean           @default(false)
+  /// Archived files leave the Inbox views but stay in Files and search.
+  archivedAt    DateTime?
+  /// Soft delete: the file sits in Trash (still counts toward quota) until restored or purged.
+  deletedAt     DateTime?
+  duplicateOfId String?
+  createdAt     DateTime          @default(now())
+  updatedAt     DateTime          @updatedAt
+
+  jobs            FileProcessingJob[]
+  chunks          FileChunk[]
+  chatAttachments WhatsappAttachment[]
+
+  @@index([userId, createdAt])
+  @@index([userId, sha256])
+  @@index([userId, folderId])
+  @@index([userId, organization])
+  @@index([userId, deletedAt])
+  @@map("imported_files")
+}
+
+enum BatchKind {
+  FILES
+  ZIP
+  WHATSAPP_CHAT
+  SHARE
+}
+
+model ImportBatch {
+  id          String               @id @default(cuid())
+  userId      String
+  user        User                 @relation(fields: [userId], references: [id], onDelete: Cascade)
+  kind        BatchKind
+  source      FileSource
+  label       String?
+  fileCount   Int                  @default(0)
+  failedCount Int                  @default(0)
+  /// [{ name, reason }] for files in this batch that could not be imported.
+  failures    Json?
+  createdAt   DateTime             @default(now())
+  files       StoredFile[]
+  chatArchive WhatsappChatArchive?
+
+  @@index([userId, createdAt])
+  @@map("import_batches")
+}
+
+model WhatsappChatArchive {
+  id             String               @id @default(cuid())
+  userId         String
+  user           User                 @relation(fields: [userId], references: [id], onDelete: Cascade)
+  batchId        String               @unique
+  batch          ImportBatch          @relation(fields: [batchId], references: [id], onDelete: Cascade)
+  chatName       String
+  platformHint   String?
+  messageCount   Int                  @default(0)
+  firstMessageAt DateTime?
+  lastMessageAt  DateTime?
+  createdAt      DateTime             @default(now())
+  messages       WhatsappMessage[]
+  attachments    WhatsappAttachment[]
+
+  @@index([userId])
+  @@map("whatsapp_chat_archives")
+}
+
+model WhatsappMessage {
+  id           String               @id @default(cuid())
+  archiveId    String
+  archive      WhatsappChatArchive  @relation(fields: [archiveId], references: [id], onDelete: Cascade)
+  seq          Int
+  sentAt       DateTime?
+  rawTimestamp String
+  sender       String?
+  body         String
+  isSystem     Boolean              @default(false)
+  attachments  WhatsappAttachment[]
+
+  @@index([archiveId, seq])
+  @@map("whatsapp_messages")
+}
+
+model WhatsappAttachment {
+  id        String              @id @default(cuid())
+  archiveId String
+  archive   WhatsappChatArchive @relation(fields: [archiveId], references: [id], onDelete: Cascade)
+  messageId String?
+  message   WhatsappMessage?    @relation(fields: [messageId], references: [id], onDelete: SetNull)
+  fileName  String
+  /// The stored file for this attachment. Identical files shared in several chats point to one stored copy.
+  fileId    String?
+  file      StoredFile?         @relation(fields: [fileId], references: [id], onDelete: SetNull)
+  /// True when the chat references this file but the export didn't include it.
+  missing   Boolean             @default(false)
+
+  @@index([archiveId])
+  @@index([fileId])
+  @@map("whatsapp_attachments")
+}
+
+enum JobStatus {
+  QUEUED
+  RUNNING
+  DONE
+  FAILED
+}
+
+model FileProcessingJob {
+  id        String     @id @default(cuid())
+  fileId    String
+  file      StoredFile @relation(fields: [fileId], references: [id], onDelete: Cascade)
+  kind      String // "extract_text" | "classify"
+  status    JobStatus  @default(QUEUED)
+  error     String?
+  attempts  Int        @default(0)
+  createdAt DateTime   @default(now())
+  updatedAt DateTime   @updatedAt
+
+  @@index([status, createdAt])
+  @@map("file_processing_jobs")
+}
+
+/// User-defined rules applied before AI: e.g. filename contains "invoice" → Finance/Invoices.
+model OrganizationRule {
+  id         String   @id @default(cuid())
+  userId     String
+  user       User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  matchField String // "filename" | "extension" | "source"
+  matchValue String
+  folderPath String // e.g. "College/Study Materials"
+  category   String?
+  priority   Int      @default(0)
+  createdAt  DateTime @default(now())
+
+  @@index([userId])
+  @@map("organization_rules")
+}
+
+// ─────────────────────────── AI Assistant (Syncly Brain) ───────────────────────────
+
+/// Searchable passages of a file's extracted text, used to ground assistant answers.
+model FileChunk {
+  id     String     @id @default(cuid())
+  fileId String
+  file   StoredFile @relation(fields: [fileId], references: [id], onDelete: Cascade)
+  userId String
+  idx    Int
+  page   Int?
+  text   String
+
+  @@index([userId])
+  @@index([fileId])
+  @@map("file_chunks")
+}
+
+model Conversation {
+  id        String        @id @default(cuid())
+  userId    String
+  user      User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  title     String
+  /// When set, answers only use this file.
+  fileId    String?
+  createdAt DateTime      @default(now())
+  updatedAt DateTime      @updatedAt
+  messages  ChatMessage[]
+
+  @@index([userId, updatedAt])
+  @@map("conversations")
+}
+
+model ChatMessage {
+  id             String       @id @default(cuid())
+  conversationId String
+  conversation   Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  role           String // "user" | "assistant"
+  content        String
+  /// [{ n, fileId, fileName, page, pageLabel }] for the passages given to the model.
+  sources        Json?
+  provider       String?
+  failed         Boolean      @default(false)
+  createdAt      DateTime     @default(now())
+
+  @@index([conversationId, createdAt])
+  @@map("chat_messages")
+}
+
+// ───────────────────────────── Tasks & Scheduler ─────────────────────────────
+
+enum TaskStatus {
+  TODO
+  IN_PROGRESS
+  DONE
+}
+
+enum TaskPriority {
+  NONE
+  LOW
+  MEDIUM
+  HIGH
+  URGENT
+}
+
+enum Repeat {
+  NONE
+  DAILY
+  WEEKDAYS
+  WEEKLY
+  MONTHLY
+}
+
+model Project {
+  id         String    @id @default(cuid())
+  userId     String
+  user       User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  name       String
+  color      String    @default("indigo")
+  archivedAt DateTime?
+  createdAt  DateTime  @default(now())
+  tasks      Task[]
+
+  @@unique([userId, name])
+  @@map("projects")
+}
+
+model Task {
+  id           String       @id @default(cuid())
+  userId       String
+  user         User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  projectId    String?
+  project      Project?     @relation(fields: [projectId], references: [id], onDelete: SetNull)
+  title        String
+  notes        String?
+  status       TaskStatus   @default(TODO)
+  priority     TaskPriority @default(NONE)
+  /// Calendar date (no timezone); dueTime is an optional local "HH:MM".
+  dueDate      DateTime?    @db.Date
+  dueTime      String?
+  repeat       Repeat       @default(NONE)
+  /// Absolute moment to send a reminder notification.
+  remindAt     DateTime?
+  remindedAt   DateTime?
+  completedAt  DateTime?
+  /// Board ordering within a status column.
+  position     Float        @default(0)
+  /// Set when the task was extracted from one of the user's files.
+  sourceFileId String?
+  createdAt    DateTime     @default(now())
+  updatedAt    DateTime     @updatedAt
+
+  @@index([userId, status, dueDate])
+  @@index([userId, remindAt])
+  @@map("tasks")
+}
+
+model CalendarEvent {
+  id              String    @id @default(cuid())
+  userId          String
+  user            User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  title           String
+  notes           String?
+  location        String?
+  /// For all-day events these hold UTC midnight of the first and last (inclusive) dates.
+  startAt         DateTime
+  endAt           DateTime
+  allDay          Boolean   @default(false)
+  color           String    @default("indigo")
+  reminderMinutes Int?
+  remindAt        DateTime?
+  remindedAt      DateTime?
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  @@index([userId, startAt])
+  @@index([userId, remindAt])
+  @@map("calendar_events")
+}

@@ -1,0 +1,51 @@
+# Render Blueprint: Dashboard → New → Blueprint → pick this repo. Free plan, no card needed.
+# Fill the "sync: false" values in the Render dashboard (they are secrets and are never stored in git).
+services:
+  - type: web
+    name: syncly
+    runtime: node
+    plan: free
+    buildCommand: npm ci && npx prisma migrate deploy && npm run build
+    startCommand: npm start
+    healthCheckPath: /login
+    envVars:
+      - key: NODE_VERSION
+        value: "22"
+      - key: DATABASE_URL        # Supabase → Connect → Transaction pooler (port 6543) + ?pgbouncer=true
+        sync: false
+      - key: DIRECT_URL          # Supabase → Connect → Session pooler (port 5432)
+        sync: false
+      - key: APP_URL             # e.g. https://syncly.onrender.com
+        sync: false
+      - key: FILE_URL_SECRET
+        generateValue: true
+      - key: STORAGE_DRIVER
+        value: s3
+      - key: S3_ENDPOINT
+        sync: false
+      - key: S3_REGION
+        sync: false
+      - key: S3_BUCKET
+        value: syncly-files
+      - key: S3_ACCESS_KEY_ID
+        sync: false
+      - key: S3_SECRET_ACCESS_KEY
+        sync: false
+      - key: MAX_UPLOAD_MB
+        value: "50"
+      - key: STORAGE_QUOTA_MB
+        value: "1024"
+      - key: SMTP_HOST
+        value: smtp-relay.brevo.com
+      - key: SMTP_PORT
+        value: "587"
+      - key: SMTP_USER
+        sync: false
+      - key: SMTP_PASS
+        sync: false
+      - key: EMAIL_FROM          # must be a sender verified in Brevo, e.g. "Syncly <you@gmail.com>"
+        sync: false
+      - key: AI_PROVIDERS
+        value: gemini,groq,cloudflare,anthropic
+      - key: GEMINI_API_KEY
+        sync: false
