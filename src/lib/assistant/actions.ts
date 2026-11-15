@@ -8,7 +8,7 @@ import { rateLimit } from "@/lib/rate-limit";
 import { aiConfigured, PROVIDER_LABEL } from "@/lib/ai/providers";
 import { answerQuestion, type Source } from "./answer";
 import { backfillChunks } from "./chunks";
-import { retrievePassages } from "./retrieve";
+import { retrieveNotes, retrievePassages } from "./retrieve";
 import { agendaText } from "./agenda";
 import { userTimezone } from "@/lib/tasks/server";
 import { formatYmd, todayIn } from "@/lib/time";
@@ -65,6 +65,8 @@ export async function sendMessage(raw: { conversationId: string | null; text: st
     await backfillChunks(user.id);
     const lastUser = [...history].reverse().find((h) => h.role === "user")?.content ?? "";
     passages = await retrievePassages(user.id, `${text} ${scopedFile ? "" : lastUser}`, { fileId: scopedFile?.id, limit: scopedFile ? 10 : 8 });
+    // The user's own notes join file passages in general questions (private notes never do).
+    if (!scopedFile) passages = [...(await retrieveNotes(user.id, `${text} ${lastUser}`, 4)), ...passages].slice(0, 10);
   }
 
   try {

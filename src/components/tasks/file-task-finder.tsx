@@ -3,7 +3,7 @@
 import { useState, useTransition } from "react";
 import Link from "next/link";
 import { ListChecks } from "lucide-react";
-import { addConfirmedTasks, findTasksInFile, type FoundTask } from "@/lib/tasks/ai-actions";
+import { addConfirmedTasks, findTasksInFile, findTasksInNote, type FoundTask } from "@/lib/tasks/ai-actions";
 import { formatHm, formatYmd } from "@/lib/time";
 import { Button } from "@/components/ui/button";
 import { Alert } from "@/components/ui/feedback";
@@ -13,7 +13,8 @@ import { Modal } from "@/components/ui/modal";
 type Row = FoundTask & { keep: boolean };
 
 /** Scans a file with AI for deadlines and action items; nothing is added until the user confirms. */
-export function FileTaskFinder({ fileId, fileName }: { fileId: string; fileName: string }) {
+export function FileTaskFinder({ fileId, noteId, fileName }: { fileId?: string; noteId?: string; fileName: string }) {
+  const what = noteId ? "note" : "file";
   const [open, setOpen] = useState(false);
   const [rows, setRows] = useState<Row[] | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -27,7 +28,7 @@ export function FileTaskFinder({ fileId, fileName }: { fileId: string; fileName:
     setError(null);
     setAdded(null);
     startScan(async () => {
-      const res = await findTasksInFile(fileId);
+      const res = noteId ? await findTasksInNote(noteId) : await findTasksInFile(fileId!);
       if (res.ok) setRows(res.tasks.map((t) => ({ ...t, keep: true })));
       else setError(res.error);
     });
@@ -36,7 +37,7 @@ export function FileTaskFinder({ fileId, fileName }: { fileId: string; fileName:
   const chosen = rows?.filter((r) => r.keep && r.title.trim()) ?? [];
   const save = () =>
     startSave(async () => {
-      const res = await addConfirmedTasks(chosen.map(({ title, dueDate, dueTime, notes }) => ({ title: title.trim(), dueDate, dueTime, notes })), fileId);
+      const res = await addConfirmedTasks(chosen.map(({ title, dueDate, dueTime, notes }) => ({ title: title.trim(), dueDate, dueTime, notes })), fileId ?? null);
       if (res.ok) setAdded(res.count);
       else setError(res.error);
     });
@@ -49,7 +50,7 @@ export function FileTaskFinder({ fileId, fileName }: { fileId: string; fileName:
       <Modal
         open={open}
         onClose={() => setOpen(false)}
-        title="Tasks found in this file"
+        title={`Tasks found in this ${what}`}
         footer={
           added !== null ? (
             <>
@@ -76,7 +77,7 @@ export function FileTaskFinder({ fileId, fileName }: { fileId: string; fileName:
         ) : added !== null ? (
           <Alert tone="success">Added {added} task{added === 1 ? "" : "s"}. Dated tasks get a reminder automatically.</Alert>
         ) : rows && rows.length === 0 ? (
-          <p className="py-6 text-center text-sm text-ink-2">No deadlines or action items found in this file.</p>
+          <p className="py-6 text-center text-sm text-ink-2">No deadlines or action items found in this {what}.</p>
         ) : rows ? (
           <>
             <p className="mb-3 text-sm text-ink-2">Check the details. AI can make mistakes, so only ticked tasks are added.</p>

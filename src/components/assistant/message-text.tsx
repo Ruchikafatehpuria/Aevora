@@ -1,4 +1,5 @@
 import Link from "next/link";
+import { sourceHref } from "@/lib/assistant/source-href";
 import type { Source } from "@/lib/assistant/answer";
 import { TaskSuggestions } from "./task-suggestion";
 import { parseTaskLine, type ProposedTask } from "@/lib/assistant/proposals";
@@ -22,7 +23,7 @@ function inline(text: string, sources: Source[], keyBase: string) {
         s ? (
           <Link
             key={`${keyBase}-${i++}`}
-            href={`/locker/files/${s.fileId}`}
+            href={sourceHref(s)}
             title={`${s.fileName}${s.page ? `, ${s.pageLabel} ${s.page}` : ""}`}
             className="mx-0.5 inline-flex h-4 min-w-4 items-center justify-center rounded bg-primary-soft px-1 align-text-top text-[10px] font-semibold text-primary hover:bg-primary hover:text-primary-ink"
           >

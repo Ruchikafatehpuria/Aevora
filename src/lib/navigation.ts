@@ -27,7 +27,7 @@ export const navigation: NavGroup[] = [
   {
     label: "Workspace",
     items: [
-      { title: "Knowledge", href: "/knowledge", icon: BookMarked, description: "Notes, bookmarks, research and Ask My Life", available: false },
+      { title: "Knowledge", href: "/knowledge", icon: BookMarked, description: "Notes, saved links and tags the assistant can search", available: true },
       { title: "Scheduler", href: "/scheduler", icon: CalendarClock, description: "Calendar, events and reminders", available: true },
       { title: "Tasks & Projects", href: "/tasks", icon: KanbanSquare, description: "Tasks, projects, boards, repeats and reminders", available: true },
     ],

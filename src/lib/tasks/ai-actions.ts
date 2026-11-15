@@ -53,21 +53,36 @@ Never invent dates: if a date isn't in the document, use null. Resolve relative 
 Skip dates that have clearly passed relative to today unless they are the only content. Return an empty list if there are no action items.
 Respond with JSON matching the schema.`;
 
-export async function findTasksInFile(fileId: string): Promise<{ ok: true; tasks: FoundTask[] } | { ok: false; error: string }> {
+export async function findTasksInFile(fileId: string): Promise<FindResult> {
   const user = await requireUser();
-  if (!aiConfigured()) return { ok: false, error: "No AI provider is configured on the server." };
   const file = await db.storedFile.findFirst({ where: { id: fileId, userId: user.id, deletedAt: null }, select: { displayName: true, extractedText: true, sensitive: true, createdAt: true } });
   if (!file) return { ok: false, error: "File not found" };
   if (file.sensitive) return { ok: false, error: "This file is marked sensitive, so it's never sent to AI." };
   if (!file.extractedText?.trim()) return { ok: false, error: "This file has no readable text to scan." };
-  if (!(await rateLimit(`findtasks:${user.id}`, 30, 3600))) return { ok: false, error: "You've scanned a lot of files this hour. Please wait a bit." };
+  return extractTasks(user, `File name: ${file.displayName}`, file.extractedText, file.createdAt);
+}
+
+export async function findTasksInNote(noteId: string): Promise<FindResult> {
+  const user = await requireUser();
+  const note = await db.note.findFirst({ where: { id: noteId, userId: user.id }, select: { title: true, body: true, sensitive: true, createdAt: true } });
+  if (!note) return { ok: false, error: "Note not found" };
+  if (note.sensitive) return { ok: false, error: "This note is marked private, so it's never sent to AI." };
+  if (!note.body.trim()) return { ok: false, error: "This note is empty." };
+  return extractTasks(user, `Note title: ${note.title || "Untitled"}`, note.body, note.createdAt);
+}
+
+type FindResult = { ok: true; tasks: FoundTask[] } | { ok: false; error: string };
+
+async function extractTasks(user: Awaited<ReturnType<typeof requireUser>>, label: string, body: string, createdAt: Date): Promise<FindResult> {
+  if (!aiConfigured()) return { ok: false, error: "No AI provider is configured on the server." };
+  if (!(await rateLimit(`findtasks:${user.id}`, 30, 3600))) return { ok: false, error: "You've scanned a lot this hour. Please wait a bit." };
 
   const tz = await userTimezone(user.profile?.timezone);
   const today = todayIn(tz);
   try {
     const { data } = await generateJson({
       system: SYSTEM,
-      text: `Today is ${today} (${["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"][weekday(today)]}). The file was added on ${file.createdAt.toISOString().slice(0, 10)}.\nFile name: ${file.displayName}\n<document>\n${file.extractedText.slice(0, 20000)}\n</document>`,
+      text: `Today is ${today} (${["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"][weekday(today)]}). It was added on ${createdAt.toISOString().slice(0, 10)}.\n${label}\n<document>\n${body.slice(0, 20000)}\n</document>`,
       schemaName: "found_tasks",
       jsonSchema: JSON_SCHEMA,
       validate: FoundSchema,
@@ -84,7 +99,7 @@ export async function findTasksInFile(fileId: string): Promise<{ ok: true; tasks
       .filter((t) => t.title);
     return { ok: true, tasks };
   } catch (e) {
-    console.error("findTasksInFile failed", e);
+    console.error("findTasks failed", e);
     return { ok: false, error: "The AI service is busy or unavailable right now. Please try again in a moment." };
   }
 }

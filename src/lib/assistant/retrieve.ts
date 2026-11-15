@@ -2,7 +2,8 @@ import "server-only";
 import { Prisma } from "@prisma/client";
 import { db } from "@/lib/db";
 
-export type Passage = { fileId: string; fileName: string; extension: string; page: number | null; text: string; rank: number };
+/** A file passage, or (kind "note") one of the user's notes, where fileId holds the note id. */
+export type Passage = { fileId: string; fileName: string; extension: string; page: number | null; text: string; rank: number; kind?: "note" };
 
 // Common words that would otherwise dominate an OR-style keyword search.
 const STOP = new Set(
@@ -61,4 +62,27 @@ async function firstPassages(userId: string, fileId: string, limit: number): Pro
     include: { file: { select: { displayName: true, extension: true } } },
   });
   return chunks.map((c) => ({ fileId: c.fileId, fileName: c.file.displayName, extension: c.file.extension, page: c.page, text: c.text, rank: 0 }));
+}
+
+/** Keyword retrieval over the user's notes and saved links. Private notes are never retrieved. */
+export async function retrieveNotes(userId: string, query: string, limit = 4): Promise<Passage[]> {
+  const tsq = toOrQuery(query);
+  if (!tsq) return [];
+  const rows = await db.$queryRaw<{ id: string; title: string; body: string; url: string | null; tags: string[]; rank: number }[]>`
+    SELECT id, title, body, url, tags,
+           ts_rank(to_tsvector('simple'::regconfig, title || ' ' || array_to_string(tags, ' ') || ' ' || body), to_tsquery('simple', ${tsq}))::float AS rank
+    FROM "notes"
+    WHERE "userId" = ${userId} AND sensitive = false
+      AND to_tsvector('simple'::regconfig, title || ' ' || array_to_string(tags, ' ') || ' ' || coalesce(url, '') || ' ' || body) @@ to_tsquery('simple', ${tsq})
+    ORDER BY rank DESC, "updatedAt" DESC
+    LIMIT ${limit}`;
+  return rows.map((r) => ({
+    kind: "note" as const,
+    fileId: r.id,
+    fileName: `Note: ${r.title || "Untitled"}`,
+    extension: "note",
+    page: null,
+    text: [r.url ? `Link: ${r.url}` : null, r.tags.length ? `Tags: ${r.tags.map((t) => `#${t}`).join(" ")}` : null, r.body.slice(0, 3000)].filter(Boolean).join("\n"),
+    rank: r.rank,
+  }));
 }

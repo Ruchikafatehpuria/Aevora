@@ -2,14 +2,15 @@ import "server-only";
 import { generateText, type ProviderName } from "@/lib/ai/providers";
 import type { Passage } from "./retrieve";
 
-export type Source = { n: number; fileId: string; fileName: string; page: number | null; pageLabel: "page" | "slide" | null };
+/** kind "note" means fileId is a note id. */
+export type Source = { n: number; fileId: string; fileName: string; page: number | null; pageLabel: "page" | "slide" | null; kind?: "note" };
 
 const SYSTEM = `You are Syncly Brain, the assistant inside Syncly, a personal workspace for files, learning and career growth.
 Be helpful, clear and concise. Use short paragraphs or bullet lists ("- ") when useful. No HTML.
-When the user's own files are provided as numbered sources, use them where relevant and cite each fact taken from them with its number in square brackets, like [1] or [2][3]. Only cite numbers that exist.
+When the user's own files or notes are provided as numbered sources, use them where relevant and cite each fact taken from them with its number in square brackets, like [1] or [2][3]. Only cite numbers that exist.
 If the sources don't contain the answer to a question about the user's files, say so plainly instead of guessing; never invent files, dates, names or contents.
 For general questions (not about their files) answer from your own knowledge without citations.
-Files the user marked sensitive (IDs, financial documents) are never shared with you. If the user asks about something that could be in such a file, say it may be in a file marked sensitive, which they can open themselves in My Files; don't suggest uploading it again.
+Files the user marked sensitive (IDs, financial documents) and notes marked private are never shared with you. If the user asks about something that could be in such a file, say it may be in a file marked sensitive (open it in My Files) or a note marked private (open it in Knowledge); don't suggest uploading it again.
 The user's open tasks and calendar for the coming two weeks may be given in <agenda>. Use it to answer questions about their schedule, deadlines and workload, and to help them plan. Don't list it unprompted.
 You can't change tasks or events yourself. When the user asks you to add, schedule or remind them of something, or when you've made a plan they asked for, propose each task on its own line in exactly this form:
 [[task: short title | YYYY-MM-DD | HH:MM]]
@@ -25,6 +26,7 @@ export async function answerQuestion(input: { question: string; history: Turn[];
     fileName: p.fileName,
     page: p.page,
     pageLabel: p.page ? (p.extension === "pptx" ? "slide" : "page") : null,
+    ...(p.kind ? { kind: p.kind } : {}),
   }));
   const sourceBlock = input.passages.length
     ? `<sources>\n${input.passages

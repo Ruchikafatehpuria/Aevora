@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useRef, useState, useTransition } from "react";
 import Link from "next/link";
+import { sourceHref } from "@/lib/assistant/source-href";
 import { useRouter } from "next/navigation";
 import { ArrowUp, FileText, Sparkles } from "lucide-react";
 import { sendMessage, setAssistantUsesFiles } from "@/lib/assistant/actions";
@@ -103,8 +104,8 @@ export function Chat({
               {file
                 ? "Answers come from this file's text, with page references."
                 : filesOn
-                  ? "I will look through your files (except sensitive ones) and cite what I use."
-                  : "Ask me anything. Turn on “Answer from my files” to ask about your documents."}
+                  ? "I will look through your files and notes (except sensitive or private ones) and cite what I use."
+                  : "Ask me anything. Turn on “Answer from my files” to ask about your documents and notes."}
             </p>
             {!aiReady && <Alert tone="error" className="mt-4 text-left">No AI provider is configured on the server, so the assistant can&apos;t answer yet.</Alert>}
             <div className="mt-6 grid w-full gap-2 sm:grid-cols-2">
@@ -129,7 +130,7 @@ export function Chat({
                         {m.sources.map((s) => (
                           <li key={s.n} className="flex gap-2 text-xs">
                             <span className="font-semibold text-primary">[{s.n}]</span>
-                            <Link href={`/locker/files/${s.fileId}`} className="truncate text-ink-2 hover:text-primary">
+                            <Link href={sourceHref(s)} className="truncate text-ink-2 hover:text-primary">
                               {s.fileName}
                               {s.page && <span className="text-ink-3"> · {s.pageLabel} {s.page}</span>}
                             </Link>

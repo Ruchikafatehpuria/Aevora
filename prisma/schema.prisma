@@ -35,6 +35,7 @@ model User {
   projects       Project[]
   tasks          Task[]
   events         CalendarEvent[]
+  notes          Note[]
 }
 
 model Profile {
@@ -512,4 +513,24 @@ model UploadChunk {
   @@unique([userId, uploadId, index])
   @@index([createdAt])
   @@map("upload_chunks")
+}
+
+// ───────────────────────────── Knowledge ─────────────────────────────
+
+/// A note or a saved link (a note with a url). Private notes are never sent to AI.
+model Note {
+  id        String   @id @default(cuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  title     String   @default("")
+  body      String   @default("")
+  url       String?
+  tags      String[] @default([])
+  pinned    Boolean  @default(false)
+  sensitive Boolean  @default(false)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([userId, updatedAt])
+  @@map("notes")
 }
