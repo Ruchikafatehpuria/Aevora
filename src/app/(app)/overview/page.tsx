@@ -63,7 +63,7 @@ export default async function OverviewPage({ searchParams }: { searchParams: Pro
 
       {welcome && (
         <Alert tone="success" className="mb-6">
-          <span className="font-medium">Your email is verified.</span>{" "}
+          <span className="font-medium">Welcome to Syncly! Your account is ready.</span>{" "}
           Start by completing your profile so Syncly can personalise your workspace.
         </Alert>
       )}

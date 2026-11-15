@@ -6,7 +6,8 @@ export function cn(...inputs: ClassValue[]) {
 }
 
 export function appUrl(path = "") {
-  const base = (process.env.APP_URL ?? "http://localhost:3000").replace(/\/$/, "");
+  const vercel = process.env.VERCEL_PROJECT_PRODUCTION_URL ? `https://${process.env.VERCEL_PROJECT_PRODUCTION_URL}` : null;
+  const base = (process.env.APP_URL || vercel || "http://localhost:3000").replace(/\/$/, "");
   return `${base}${path}`;
 }
 

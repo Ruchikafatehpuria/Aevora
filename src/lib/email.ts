@@ -9,6 +9,12 @@ type Mail = { to: string; subject: string; text: string; html: string };
  */
 export const devEmailShortcuts = () => process.env.NODE_ENV !== "production" && !process.env.SMTP_HOST;
 
+/**
+ * True on a production deployment with no email service configured. Accounts are then verified at
+ * sign-up (nothing could be delivered) and password reset by email is unavailable.
+ */
+export const emailUnavailable = () => process.env.NODE_ENV === "production" && !process.env.SMTP_HOST;
+
 let transporter: Transporter | null = null;
 
 function getTransporter() {

@@ -25,6 +25,8 @@ type Item = {
   result?: ImportResult;
 };
 
+/** Matches CHUNK_BYTES in src/lib/locker/chunks.ts. */
+const CHUNK_BYTES = 4 * 1024 * 1024;
 const CONCURRENCY = 3;
 
 async function readEntries(entry: FileSystemEntry, prefix = ""): Promise<{ file: File; path: string }[]> {
@@ -83,37 +85,63 @@ export function UploadCentre({ maxBytes, quotaRemaining }: { maxBytes: number; q
         .then(async (r) => (r.ok ? ((await r.json()).id as string) : null))
         .catch(() => null);
       const batchId = await batch.current;
-      const xhr = new XMLHttpRequest();
-      xhrs.current.set(item.id, xhr);
-      xhr.open("POST", "/api/locker/upload");
-      xhr.setRequestHeader("x-file-name", encodeURIComponent(item.file.name));
-      xhr.setRequestHeader("x-source", source);
-      xhr.setRequestHeader("x-zip-mode", extractZips ? "extract" : "keep");
-      if (batchId) xhr.setRequestHeader("x-batch-id", batchId);
-      if (item.relPath) xhr.setRequestHeader("x-relative-path", encodeURIComponent(item.relPath));
-      xhr.upload.onprogress = (e) => e.lengthComputable && update(item.id, { progress: Math.round((e.loaded / e.total) * 100) });
-      xhr.onload = () => {
-        xhrs.current.delete(item.id);
-        let body: (ImportResult & { error?: string }) | null = null;
-        try {
-          body = JSON.parse(xhr.responseText);
-        } catch {}
-        if (xhr.status >= 200 && xhr.status < 300 && body) {
-          const allFailed = body.imported.length === 0 && body.failed.length > 0;
-          update(item.id, { status: allFailed ? "failed" : "done", progress: 100, result: body, error: allFailed ? body.failed[0]!.reason : undefined });
-        } else {
-          update(item.id, { status: "failed", retryable: xhr.status >= 500 || xhr.status === 429, error: body?.error ?? `Upload failed (${xhr.status || "network error"})` });
+      const headers: Record<string, string> = {
+        "x-file-name": encodeURIComponent(item.file.name),
+        "x-source": source,
+        "x-zip-mode": extractZips ? "extract" : "keep",
+      };
+      if (batchId) headers["x-batch-id"] = batchId;
+      if (item.relPath) headers["x-relative-path"] = encodeURIComponent(item.relPath);
+
+      /** One request; resolves with status and body, or null if the user cancelled. */
+      const send = (url: string, body: Blob | null, extra: Record<string, string>, onProgress?: (loaded: number) => void) =>
+        new Promise<{ status: number; text: string } | null>((resolve) => {
+          const xhr = new XMLHttpRequest();
+          xhrs.current.set(item.id, xhr);
+          xhr.open("POST", url);
+          for (const [k, v] of Object.entries({ ...headers, ...extra })) xhr.setRequestHeader(k, v);
+          if (onProgress) xhr.upload.onprogress = (e) => onProgress(e.loaded);
+          xhr.onload = () => resolve({ status: xhr.status, text: xhr.responseText });
+          xhr.onerror = () => resolve({ status: 0, text: "" });
+          xhr.onabort = () => resolve(null);
+          xhr.send(body);
+        });
+
+      const total = item.file.size;
+      const setProgress = (sent: number) => update(item.id, { progress: Math.min(99, Math.round((sent / total) * 100)) });
+      let res: { status: number; text: string } | null;
+      if (total > CHUNK_BYTES) {
+        // Hosts such as Vercel cap request bodies (~4.5 MB), so big files go up in 4 MB pieces.
+        const uploadId = crypto.randomUUID();
+        const pieces = Math.ceil(total / CHUNK_BYTES);
+        res = { status: 200, text: "" };
+        for (let i = 0; i < pieces && res && res.status >= 200 && res.status < 300; i++) {
+          const part = item.file.slice(i * CHUNK_BYTES, Math.min(total, (i + 1) * CHUNK_BYTES));
+          for (let attempt = 0; attempt < 3; attempt++) {
+            res = await send("/api/locker/upload/chunk", part, { "x-upload-id": uploadId, "x-chunk-index": String(i) }, (loaded) => setProgress(i * CHUNK_BYTES + loaded));
+            if (!res || (res.status !== 0 && res.status < 500)) break; // only retry network/server errors
+          }
         }
-      };
-      xhr.onerror = () => {
-        xhrs.current.delete(item.id);
-        update(item.id, { status: "failed", retryable: true, error: "Network error. Check your connection and retry." });
-      };
-      xhr.onabort = () => {
-        xhrs.current.delete(item.id);
-        update(item.id, { status: "cancelled", progress: 0 });
-      };
-      xhr.send(item.file);
+        if (res && res.status >= 200 && res.status < 300) {
+          res = await send("/api/locker/upload", null, { "x-upload-id": uploadId, "x-chunk-total": String(pieces) });
+        }
+      } else {
+        res = await send("/api/locker/upload", item.file, {}, setProgress);
+      }
+      xhrs.current.delete(item.id);
+
+      if (!res) return update(item.id, { status: "cancelled", progress: 0 });
+      if (res.status === 0) return update(item.id, { status: "failed", retryable: true, error: "Network error. Check your connection and retry." });
+      let body: (ImportResult & { error?: string }) | null = null;
+      try {
+        body = JSON.parse(res.text);
+      } catch {}
+      if (res.status >= 200 && res.status < 300 && body && Array.isArray(body.imported)) {
+        const allFailed = body.imported.length === 0 && body.failed.length > 0;
+        update(item.id, { status: allFailed ? "failed" : "done", progress: 100, result: body, error: allFailed ? body.failed[0]!.reason : undefined });
+      } else {
+        update(item.id, { status: "failed", retryable: res.status >= 500 || res.status === 429, error: body?.error ?? `Upload failed (${res.status})` });
+      }
     },
     [source, extractZips],
   );

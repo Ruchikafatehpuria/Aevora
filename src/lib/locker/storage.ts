@@ -7,7 +7,7 @@ import { PassThrough, Transform, type Readable } from "node:stream";
 import { pipeline } from "node:stream/promises";
 
 /**
- * Object storage. Local disk for now; the interface is shaped so an S3/R2 driver can replace it.
+ * Object storage: local disk (development), S3-compatible buckets, or a private Vercel Blob store.
  * Keys are generated server-side and never derived from user filenames, so path traversal is impossible.
  */
 export interface StorageDriver {
@@ -142,4 +142,59 @@ class S3Storage implements StorageDriver {
   }
 }
 
-export const storage: StorageDriver = process.env.STORAGE_DRIVER === "s3" ? new S3Storage() : new LocalDiskStorage();
+/**
+ * Vercel Blob in a *private* store: reads need the store's credentials, so files are only served
+ * through the authenticated, signed download route. Credentials come from the connected store
+ * (OIDC: BLOB_STORE_ID + VERCEL_OIDC_TOKEN) or BLOB_READ_WRITE_TOKEN.
+ */
+class VercelBlobStorage implements StorageDriver {
+  async write(input: Readable, maxBytes: number) {
+    const key = newKey();
+    const { put, del } = await import("@vercel/blob");
+    const meter = meterStream(maxBytes);
+    const body = new PassThrough();
+    const sending = put(`files/${key}`, body, { access: "private", contentType: "application/octet-stream", addRandomSuffix: false });
+    try {
+      await Promise.all([pipeline(input, meter.stream, body), sending]);
+    } catch (e) {
+      body.destroy();
+      await sending.catch(() => {});
+      await del(`files/${key}`).catch(() => {});
+      throw e;
+    }
+    return { key, ...meter.result() };
+  }
+
+  async read(key: string, range?: { start: number; end: number }) {
+    assertKey(key);
+    const { get } = await import("@vercel/blob");
+    const res = await get(`files/${key}`, {
+      access: "private",
+      headers: range ? { Range: `bytes=${range.start}-${range.end}` } : undefined,
+    });
+    if (!res?.stream) throw new Error("File not found in storage");
+    const { Readable: NodeReadable } = await import("node:stream");
+    return NodeReadable.fromWeb(res.stream as import("node:stream/web").ReadableStream);
+  }
+
+  async size(key: string) {
+    assertKey(key);
+    const { head } = await import("@vercel/blob");
+    return (await head(`files/${key}`)).size;
+  }
+
+  async remove(key: string) {
+    assertKey(key);
+    const { del } = await import("@vercel/blob");
+    await del(`files/${key}`);
+  }
+}
+
+function pickDriver(): StorageDriver {
+  const d = process.env.STORAGE_DRIVER;
+  if (d === "s3") return new S3Storage();
+  if (d === "blob" || (!d && (process.env.BLOB_STORE_ID || process.env.BLOB_READ_WRITE_TOKEN))) return new VercelBlobStorage();
+  return new LocalDiskStorage();
+}
+
+export const storage: StorageDriver = pickDriver();

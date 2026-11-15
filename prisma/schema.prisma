@@ -498,3 +498,18 @@ model CalendarEvent {
   @@index([userId, remindAt])
   @@map("calendar_events")
 }
+
+/// Pieces of a large upload sent in several requests (hosts like Vercel cap request bodies at ~4.5 MB).
+model UploadChunk {
+  id        String   @id @default(cuid())
+  userId    String
+  uploadId  String
+  index     Int
+  key       String
+  size      Int
+  createdAt DateTime @default(now())
+
+  @@unique([userId, uploadId, index])
+  @@index([createdAt])
+  @@map("upload_chunks")
+}

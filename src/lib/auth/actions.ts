@@ -3,7 +3,7 @@
 import { headers } from "next/headers";
 import { redirect } from "next/navigation";
 import { db } from "@/lib/db";
-import { devEmailShortcuts, sendMail, verificationEmail, passwordResetEmail } from "@/lib/email";
+import { devEmailShortcuts, emailUnavailable, sendMail, verificationEmail, passwordResetEmail } from "@/lib/email";
 import { rateLimit } from "@/lib/rate-limit";
 import { appUrl } from "@/lib/utils";
 import { hashPassword, verifyPassword } from "./password";
@@ -47,6 +47,15 @@ export async function signup(_: FormState, formData: FormData): Promise<FormStat
   const existing = await db.user.findUnique({ where: { email } });
   if (existing) {
     return { error: "An account with this email already exists. Log in or reset your password.", values };
+  }
+
+  if (emailUnavailable()) {
+    // No email service on this deployment: a verification email could never arrive.
+    const user = await db.user.create({
+      data: { name, email, passwordHash: await hashPassword(password), emailVerified: new Date(), profile: { create: {} } },
+    });
+    await createSession(user.id);
+    redirect("/overview?welcome=1");
   }
 
   const user = await db.user.create({
@@ -117,6 +126,9 @@ export async function requestPasswordReset(_: FormState, formData: FormData): Pr
   if (!parsed.success) return { fieldErrors: { email: parsed.error.issues.map((i) => i.message) } };
   const email = parsed.data;
 
+  if (emailUnavailable()) {
+    return { error: "Password reset by email isn't set up on this site yet. Please contact the site owner." };
+  }
   const generic = { success: "If an account exists for that email, we've sent a password reset link." };
   if (!(await rateLimit(`reset:${await clientIp()}`, 5, 900))) {
     return { error: "Too many reset requests. Please try again in 15 minutes." };
